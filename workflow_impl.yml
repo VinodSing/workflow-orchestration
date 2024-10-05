@@ -1,0 +1,69 @@
+# 
+
+
+main:
+    params: []
+    steps:
+      - init_global:
+          assign:
+          - billingProjectId: pure-quasar-319704
+          - serviceAccount: ${text.replace_all_regex(sys.get_env("GOOGLE_CLOUD_SERVICE_ACCOUNT_NAME"), "^projects/(.+)/serviceAccounts/", "")}
+      
+      - query:
+          call: bq_job_insertion
+          args:
+            billingProjectId: ${billingProjectId}
+          result: queryResponse
+
+bq_job_insertion:
+    params: [billingProjectId]
+    steps:
+
+        - insert_job:
+            try:
+              call: http.post
+              args:
+                url: ${"https://bigquery.googleapis.com/bigquery/v2/projects/" + billingProjectId + "/jobs"}
+                query:
+                  fields: "status,jobReference,statistics"
+                body:
+                  configuration:
+                    query:
+                      query: "CALL `pure-quasar-319704.test.covid_ind_analysis`();"
+                      useLegacySql: false
+                      useQueryCache: false
+                  jobReference:
+                    location: "eu"
+                  # 60 minutes timeout
+                  jobTimeoutMs: 3600000
+                auth:
+                  type: OAuth2
+                  scope: ["https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/drive"]
+              result: insertJobResponse
+
+            except:
+              as: e
+              steps:
+                - end_monitoring_error:
+                    call: failedLog
+                    args:
+                      projectId: ${billingProjectId}
+                - raise_insert_job_error:
+                    raise: ${e}
+
+failedLog:
+  params: [projectId]
+  steps:
+    - loginfo:
+        call: http.post
+        args:
+          url: https://logging.googleapis.com/v2/entries:write
+          auth:
+            type: OAuth2
+          body:
+            entries: 
+              -logName: ${"projects/" + projectId + "/jobs/workflow_logger/"}
+              resource:
+                type: "audited_resource"
+                labels: {}
+              textPayload: This is failed log from workflow "covid_ind_analysis_wkf" 
